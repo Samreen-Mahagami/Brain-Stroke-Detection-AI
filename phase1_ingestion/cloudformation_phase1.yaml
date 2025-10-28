@@ -1,0 +1,351 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Phase 1: DICOM Ingestion & Storage Infrastructure'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: stroke-detection-ai
+    Description: Project name for resource naming
+
+Resources:
+  # S3 Bucket for DICOM uploads
+  DicomUploadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-dicom-uploads-${AWS::AccountId}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldUploads
+            Status: Enabled
+            ExpirationInDays: 90
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # AWS HealthImaging Data Store
+  HealthImagingDataStore:
+    Type: AWS::HealthImaging::Datastore
+    Properties:
+      DatastoreName: !Sub '${ProjectName}-datastore'
+      Tags:
+        Project: !Ref ProjectName
+        Phase: ingestion
+
+  # DynamoDB Table for metadata
+  StudyMetadataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectName}-study-metadata'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: study_id
+          AttributeType: S
+        - AttributeName: patient_id
+          AttributeType: S
+        - AttributeName: upload_timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: study_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: patient-index
+          KeySchema:
+            - AttributeName: patient_id
+              KeyType: HASH
+            - AttributeName: upload_timestamp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # IAM Role for Lambda functions
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:HeadObject
+                Resource: !Sub '${DicomUploadBucket.Arn}/*'
+        - PolicyName: HealthImagingAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - medical-imaging:StartDICOMImportJob
+                  - medical-imaging:GetDICOMImportJob
+                  - medical-imaging:GetImageSet
+                  - medical-imaging:GetImageSetMetadata
+                  - medical-imaging:GetImageFrame
+                Resource: !GetAtt HealthImagingDataStore.DatastoreArn
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                Resource:
+                  - !GetAtt StudyMetadataTable.Arn
+                  - !Sub '${StudyMetadataTable.Arn}/index/*'
+        - PolicyName: StepFunctionsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: !Sub 'arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${ProjectName}-processing'
+        - PolicyName: PassRoleAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: !GetAtt HealthImagingRole.Arn
+
+  # IAM Role for HealthImaging
+  HealthImagingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-healthimaging-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: medical-imaging.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt DicomUploadBucket.Arn
+                  - !Sub '${DicomUploadBucket.Arn}/*'
+
+  # Lambda: Upload Handler
+  UploadHandlerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-upload-handler'
+      Runtime: python3.11
+      Handler: lambda_upload_handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 60
+      MemorySize: 512
+      Environment:
+        Variables:
+          UPLOAD_BUCKET: !Ref DicomUploadBucket
+          HEALTHIMAGING_DATASTORE_ID: !GetAtt HealthImagingDataStore.DatastoreId
+          HEALTHIMAGING_ROLE_ARN: !GetAtt HealthImagingRole.Arn
+          DYNAMODB_TABLE: !Ref StudyMetadataTable
+          STEP_FUNCTION_ARN: !Sub 'arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${ProjectName}-processing'
+      Code:
+        ZipFile: |
+          # Placeholder - deploy actual code from lambda_upload_handler.py
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': 'Deploy actual code'}
+
+  # Lambda: Import Monitor
+  ImportMonitorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-import-monitor'
+      Runtime: python3.11
+      Handler: lambda_import_monitor.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: !Ref StudyMetadataTable
+      Code:
+        ZipFile: |
+          # Placeholder - deploy actual code from lambda_import_monitor.py
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': 'Deploy actual code'}
+
+  # API Gateway
+  ApiGateway:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub '${ProjectName}-api'
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+        AllowMethods:
+          - POST
+          - GET
+        AllowHeaders:
+          - '*'
+
+  ApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ApiGateway
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt UploadHandlerFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  ApiRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ApiGateway
+      RouteKey: 'POST /upload'
+      Target: !Sub 'integrations/${ApiIntegration}'
+
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref ApiGateway
+      StageName: prod
+      AutoDeploy: true
+
+  LambdaApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref UploadHandlerFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*'
+
+  # Step Functions State Machine (placeholder for full workflow)
+  ProcessingStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub '${ProjectName}-processing'
+      RoleArn: !GetAtt StepFunctionsRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "Stroke Detection Processing Pipeline - Phase 1",
+          "StartAt": "WaitForImport",
+          "States": {
+            "WaitForImport": {
+              "Type": "Wait",
+              "Seconds": 30,
+              "Next": "CheckImportStatus"
+            },
+            "CheckImportStatus": {
+              "Type": "Task",
+              "Resource": "${ImportMonitorFunction.Arn}",
+              "Next": "IsImportComplete"
+            },
+            "IsImportComplete": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.is_complete",
+                  "BooleanEquals": true,
+                  "Next": "ImportSuccess"
+                },
+                {
+                  "Variable": "$.has_error",
+                  "BooleanEquals": true,
+                  "Next": "ImportFailed"
+                }
+              ],
+              "Default": "WaitForImport"
+            },
+            "ImportSuccess": {
+              "Type": "Succeed"
+            },
+            "ImportFailed": {
+              "Type": "Fail",
+              "Error": "ImportJobFailed",
+              "Cause": "HealthImaging import job failed"
+            }
+          }
+        }
+
+  StepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeLambda
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt ImportMonitorFunction.Arn
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod'
+    Export:
+      Name: !Sub '${ProjectName}-api-endpoint'
+
+  UploadBucket:
+    Description: S3 bucket for DICOM uploads
+    Value: !Ref DicomUploadBucket
+    Export:
+      Name: !Sub '${ProjectName}-upload-bucket'
+
+  DatastoreId:
+    Description: HealthImaging Datastore ID
+    Value: !GetAtt HealthImagingDataStore.DatastoreId
+    Export:
+      Name: !Sub '${ProjectName}-datastore-id'
+
+  MetadataTable:
+    Description: DynamoDB table name
+    Value: !Ref StudyMetadataTable
+    Export:
+      Name: !Sub '${ProjectName}-metadata-table'
+
+  StateMachineArn:
+    Description: Step Functions State Machine ARN
+    Value: !Ref ProcessingStateMachine
+    Export:
+      Name: !Sub '${ProjectName}-state-machine-arn'

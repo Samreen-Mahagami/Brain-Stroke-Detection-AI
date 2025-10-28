@@ -1,0 +1,91 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# AWS
+*.zip
+.aws/
+aws-exports.js
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Test files
+test_*.py
+*_test.py
+
+# DICOM files (large binary files)
+*.dcm
+*.dicom
+
+# Images
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.gif
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# CloudFormation outputs
+outputs.json
+stack-outputs.json
+
+# Lambda deployment packages
+lambda_*.zip
+function.zip
+
+# Node modules (if using CDK)
+node_modules/
+package-lock.json
+
+# Terraform (if used)
+.terraform/
+*.tfstate
+*.tfstate.backup
+
+# Secrets
+secrets.json
+credentials.json
+config.json
+
+# OS
+Thumbs.db
