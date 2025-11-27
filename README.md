@@ -43,7 +43,7 @@ DICOM Upload → AWS HealthImaging → SageMaker (CV Model) → Bedrock (Report 
 - Evidence-based recommendations
 - Structured medical documentation
 
-### 🔔 Phase 5: Alerting & Integration (Planned)
+## 🔔 Phase 5: Alerting & Integration (Planned)
 - SNS notifications for critical findings
 - EHR system integration
 - Dashboard and monitoring
